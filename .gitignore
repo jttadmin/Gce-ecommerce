@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build artifacts
+dist/
+build/
+coverage/
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+credentials.json
+service-account*.json
+
+# Logs and temporary files
+*.log
+npm-debug.log*
+*.tmp
+*.swp
+
+# Editors and operating system
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Backups
+*.backup
+*.bak
+
+# Terraform state and local configuration
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
+!example.tfvars

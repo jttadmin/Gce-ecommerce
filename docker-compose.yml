@@ -1,0 +1,236 @@
+name: kart
+
+x-app: &app
+  restart: unless-stopped
+  networks: [shop]
+
+services:
+  # ───────────── data & messaging ─────────────
+  postgres:
+    <<: *app
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mongo:
+    <<: *app
+    image: mongo:7
+    volumes:
+      - mongodata:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    <<: *app
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "volatile-lru"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  kafka:
+    <<: *app
+    image: apache/kafka:3.8.1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG_RETENTION_HOURS: 72
+    volumes:
+      - kafkadata:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 20s
+
+  kafka-init:
+    image: apache/kafka:3.8.1
+    networks: [shop]
+    depends_on:
+      kafka: { condition: service_healthy }
+    restart: "no"
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        for t in user.registered order.created order.confirmed order.cancelled inventory.reserved inventory.failed; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic $$t --partitions 3 --replication-factor 1
+        done
+
+  # ───────────── application services ─────────────
+  gateway:
+    <<: *app
+    build: ./gateway
+    environment:
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      RATE_LIMIT_PER_MIN: ${RATE_LIMIT_PER_MIN:-600}
+      USER_SERVICE_URL: http://user-service:3001
+      CATALOG_SERVICE_URL: http://catalog-service:3002
+      CART_SERVICE_URL: http://cart-service:3003
+      ORDER_SERVICE_URL: http://order-service:3004
+    ports: ["8080:8080"]
+    depends_on: [user-service, catalog-service, cart-service, order-service]
+
+  user-service:
+    <<: *app
+    build: ./user-service
+    environment:
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/users
+      KAFKA_BROKERS: kafka:9092
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin12345}
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+
+  catalog-service:
+    <<: *app
+    build: ./catalog-service
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+      REDIS_URL: redis://redis:6379
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+
+  cart-service:
+    <<: *app
+    build: ./cart-service
+    environment:
+      REDIS_ADDR: redis:6379
+      CATALOG_SERVICE_URL: http://catalog-service:3002
+    depends_on:
+      redis: { condition: service_healthy }
+      catalog-service: { condition: service_started }
+
+  order-service:
+    <<: *app
+    build: ./order-service
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/orders
+      KAFKA_BROKERS: kafka:9092
+      CART_SERVICE_URL: http://cart-service:3003
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+
+  notification-service:
+    <<: *app
+    build: ./notification-service
+    environment:
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      kafka-init: { condition: service_completed_successfully }
+
+  frontend:
+    <<: *app
+    build: ./frontend
+    ports: ["3000:80"]
+    depends_on: [gateway]
+
+  # ───────────── monitoring ─────────────
+  prometheus:
+    <<: *app
+    image: prom/prometheus:v2.55.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus:ro
+      - promdata:/prometheus
+    ports: ["9090:9090"]
+
+  grafana:
+    <<: *app
+    image: grafana/grafana:11.3.1
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/ecommerce-overview.json
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    ports: ["3030:3000"]
+    depends_on: [prometheus]
+
+  redis-exporter:
+    <<: *app
+    image: oliver006/redis_exporter:v1.66.0
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    depends_on: [redis]
+
+  kafka-exporter:
+    <<: *app
+    image: danielqsj/kafka-exporter:v1.8.0
+    command: ["--kafka.server=kafka:9092"]
+    depends_on:
+      kafka: { condition: service_healthy }
+
+  postgres-exporter:
+    <<: *app
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.16.0
+    environment:
+      DATA_SOURCE_NAME: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/postgres?sslmode=disable
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  mongodb-exporter:
+    <<: *app
+    image: percona/mongodb_exporter:0.41.2
+    command: ["--mongodb.uri=mongodb://mongo:27017", "--collect-all", "--compatible-mode"]
+    depends_on:
+      mongo: { condition: service_healthy }
+
+  cadvisor:
+    <<: *app
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+
+networks:
+  shop:
+
+volumes:
+  pgdata:
+  mongodata:
+  redisdata:
+  kafkadata:
+  promdata:
+  grafanadata:
