@@ -413,6 +413,22 @@ export default function App() {
         </div>
       </header>
 
+      {/* KART_MARKET_NAV */}
+      <nav className="market-nav" aria-label="Shop departments">
+        <div className="market-nav-in">
+          <button onClick={() => { setView('shop'); clearFilters(); }}>
+            ☰ All
+          </button>
+          {categories.slice(0, 8).map((c) => (
+            <button key={c.name}
+              onClick={() => { setView('shop'); pickCategory(c.name); }}>
+              {c.name}
+            </button>
+          ))}
+          <span className="market-nav-promo">Discover something great</span>
+        </div>
+      </nav>
+
       <main>
         {view === 'orders' && <Orders onBack={() => setView('shop')} />}
         {view === 'admin' && <Admin onBack={() => setView('shop')} notify={notify} />}
