@@ -1,0 +1,3 @@
+# Never commit credentials or generated secret manifests
+*.secret.yaml
+secret-values.env

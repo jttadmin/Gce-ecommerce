@@ -1,0 +1,62 @@
+global:
+  namespace: ecommerce
+
+images:
+  frontend:
+    repository: jhanvi2022/kart-frontend
+    tag: v1.0.0
+  gateway:
+    repository: jhanvi2022/kart-gateway
+    tag: v1.0.0
+  userService:
+    repository: jhanvi2022/kart-user-service
+    tag: v1.0.0
+  catalogService:
+    repository: jhanvi2022/kart-catalog-service
+    tag: v1.0.0
+  cartService:
+    repository: jhanvi2022/kart-cart-service
+    tag: v1.0.0
+  orderService:
+    repository: jhanvi2022/kart-order-service
+    tag: v1.0.0
+  notificationService:
+    repository: jhanvi2022/kart-notification-service
+    tag: v1.0.0
+
+postgres:
+  storage: 5Gi
+
+mongodb:
+  storage: 5Gi
+
+redis:
+  storage: 1Gi
+
+kafka:
+  storage: 5Gi
+
+frontend:
+  replicas: 1
+
+services:
+  replicas: 1
+
+config:
+  rateLimitPerMin: "600"
+  userServiceUrl: "http://user-service:3001"
+  catalogServiceUrl: "http://catalog-service:3002"
+  cartServiceUrl: "http://cart-service:3003"
+  orderServiceUrl: "http://order-service:3004"
+  kafkaBrokers: "kafka:9092"
+  mongoUrl: "mongodb://mongo:27017"
+  redisUrl: "redis://redis:6379"
+  redisAddr: "redis:6379"
+
+secrets:
+  existingSecret: "ecommerce-app"
+  postgresSecret: "ecommerce-postgres"
+  adminEmailKey: "ADMIN_EMAIL"
+  adminPasswordKey: "ADMIN_PASSWORD"
+  jwtSecretKey: "JWT_SECRET"
+  postgresPasswordKey: "POSTGRES_PASSWORD"

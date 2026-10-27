@@ -1,0 +1,7 @@
+.git/
+.gitignore
+*.swp
+*.bak
+.env
+*.secret.yaml
+secret-values.env

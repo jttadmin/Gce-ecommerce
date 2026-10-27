@@ -1,0 +1,163 @@
+{{- $namespace := .Values.global.namespace }}
+{{- $services := list
+  (dict "name" "frontend" "image" .Values.images.frontend "port" 80 "replicas" .Values.frontend.replicas)
+  (dict "name" "gateway" "image" .Values.images.gateway "port" 8080 "replicas" .Values.services.replicas)
+  (dict "name" "user-service" "image" .Values.images.userService "port" 3001 "replicas" .Values.services.replicas)
+  (dict "name" "catalog-service" "image" .Values.images.catalogService "port" 3002 "replicas" .Values.services.replicas)
+  (dict "name" "cart-service" "image" .Values.images.cartService "port" 3003 "replicas" .Values.services.replicas)
+  (dict "name" "order-service" "image" .Values.images.orderService "port" 3004 "replicas" .Values.services.replicas)
+}}
+{{- range $svc := $services }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $svc.name }}
+  namespace: {{ $namespace }}
+  labels:
+    app.kubernetes.io/name: {{ $svc.name }}
+    app.kubernetes.io/part-of: kart-ecommerce
+spec:
+  replicas: {{ $svc.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $svc.name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ $svc.name }}
+        app.kubernetes.io/part-of: kart-ecommerce
+    spec:
+      containers:
+        - name: {{ $svc.name }}
+          image: "{{ $svc.image.repository }}:{{ $svc.image.tag }}"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: {{ $svc.port }}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+{{- if eq $svc.name "gateway" }}
+          env:
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secrets.existingSecret }}
+                  key: {{ $.Values.secrets.jwtSecretKey }}
+            - name: RATE_LIMIT_PER_MIN
+              value: {{ $.Values.config.rateLimitPerMin | quote }}
+            - name: USER_SERVICE_URL
+              value: {{ $.Values.config.userServiceUrl | quote }}
+            - name: CATALOG_SERVICE_URL
+              value: {{ $.Values.config.catalogServiceUrl | quote }}
+            - name: CART_SERVICE_URL
+              value: {{ $.Values.config.cartServiceUrl | quote }}
+            - name: ORDER_SERVICE_URL
+              value: {{ $.Values.config.orderServiceUrl | quote }}
+{{- else if eq $svc.name "user-service" }}
+          env:
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secrets.existingSecret }}
+                  key: {{ $.Values.secrets.jwtSecretKey }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secrets.postgresSecret }}
+                  key: {{ $.Values.secrets.postgresPasswordKey }}
+            - name: DATABASE_URL
+              value: "postgres://postgres:$(POSTGRES_PASSWORD)@postgres:5432/users"
+            - name: KAFKA_BROKERS
+              value: {{ $.Values.config.kafkaBrokers | quote }}
+            - name: ADMIN_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secrets.existingSecret }}
+                  key: {{ $.Values.secrets.adminEmailKey }}
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secrets.existingSecret }}
+                  key: {{ $.Values.secrets.adminPasswordKey }}
+{{- else if eq $svc.name "catalog-service" }}
+          env:
+            - name: MONGO_URL
+              value: {{ $.Values.config.mongoUrl | quote }}
+            - name: REDIS_URL
+              value: {{ $.Values.config.redisUrl | quote }}
+            - name: KAFKA_BROKERS
+              value: {{ $.Values.config.kafkaBrokers | quote }}
+{{- else if eq $svc.name "cart-service" }}
+          env:
+            - name: REDIS_ADDR
+              value: {{ $.Values.config.redisAddr | quote }}
+            - name: CATALOG_SERVICE_URL
+              value: {{ $.Values.config.catalogServiceUrl | quote }}
+{{- else if eq $svc.name "order-service" }}
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secrets.postgresSecret }}
+                  key: {{ $.Values.secrets.postgresPasswordKey }}
+            - name: DATABASE_URL
+              value: "postgresql://postgres:$(POSTGRES_PASSWORD)@postgres:5432/orders"
+            - name: KAFKA_BROKERS
+              value: {{ $.Values.config.kafkaBrokers | quote }}
+            - name: CART_SERVICE_URL
+              value: {{ $.Values.config.cartServiceUrl | quote }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $svc.name }}
+  namespace: {{ $namespace }}
+spec:
+  selector:
+    app.kubernetes.io/name: {{ $svc.name }}
+  ports:
+    - name: http
+      port: {{ $svc.port }}
+      targetPort: http
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-service
+  namespace: {{ $namespace }}
+  labels:
+    app.kubernetes.io/name: notification-service
+    app.kubernetes.io/part-of: kart-ecommerce
+spec:
+  replicas: {{ .Values.services.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: notification-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: notification-service
+        app.kubernetes.io/part-of: kart-ecommerce
+    spec:
+      containers:
+        - name: notification-service
+          image: "{{ .Values.images.notificationService.repository }}:{{ .Values.images.notificationService.tag }}"
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KAFKA_BROKERS
+              value: {{ .Values.config.kafkaBrokers | quote }}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
