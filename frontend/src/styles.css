@@ -400,3 +400,61 @@ body { background: #eaeded; color: #0f1111; }
   .block { min-height: 125px; padding: 12px; }
   .block-name { font-size: 1rem; }
 }
+
+
+/* Enhanced marketplace product-card details */
+.tile-category {
+  display: inline-block;
+  margin-bottom: 5px;
+  color: #565959;
+  font-size: .76rem;
+  text-transform: uppercase;
+  letter-spacing: .045em;
+}
+
+.tile-title {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #0f1111;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.tile-title:hover {
+  color: #c45500;
+  text-decoration: underline;
+}
+
+.tile-brand {
+  margin-top: 5px;
+  color: #565959;
+  font-size: .82rem;
+}
+
+.tile-description {
+  display: -webkit-box;
+  margin-top: 7px;
+  overflow: hidden;
+  color: #565959;
+  font-size: .85rem;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.tile-availability {
+  margin-top: 8px;
+  font-size: .82rem;
+}
+
+.tile-row {
+  margin-top: 8px;
+}
+
+@media (max-width: 720px) {
+  .tile-category { font-size: .68rem; }
+  .tile-description { font-size: .78rem; }
+  .tile-brand, .tile-availability { font-size: .75rem; }
+}

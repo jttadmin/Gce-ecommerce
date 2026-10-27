@@ -3,6 +3,10 @@
 // and Kafka-driven stock reservation (order.created -> inventory.reserved | inventory.failed).
 
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const multer = require('multer');
+const sharp = require('sharp');
 const express = require('express');
 const { MongoClient, ObjectId } = require('mongodb');
 const Redis = require('ioredis');
@@ -12,6 +16,21 @@ const seed = require('./seed');
 
 const SERVICE = 'catalog-service';
 const PORT = Number(process.env.PORT || 3002);
+
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, '..', 'uploads');
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    const allowed = new Set(['image/jpeg', 'image/png', 'image/webp']);
+    if (!allowed.has(file.mimetype)) {
+      return cb(new Error('Only JPEG, PNG, and WebP images are allowed'));
+    }
+    cb(null, true);
+  },
+});
 const MONGO_URL = process.env.MONGO_URL || 'mongodb://mongo:27017';
 const MONGO_DB = process.env.MONGO_DB || 'catalog';
 const REDIS_URL = process.env.REDIS_URL || 'redis://redis:6379';
@@ -136,6 +155,63 @@ app.get('/products/:id', wrap(async (req, res) => {
   if (!p) return res.status(404).json({ error: 'product not found' });
   res.json(p);
 }));
+
+// Admin image upload: validate actual image content, resize, and save as WebP.
+app.post('/products/upload', requireAdmin, (req, res, next) => {
+  upload.single('image')(req, res, (err) => {
+    if (err) {
+      const tooLarge = err.code === 'LIMIT_FILE_SIZE';
+      return res.status(tooLarge ? 413 : 400).json({
+        error: tooLarge ? 'Image must be 5 MB or smaller' : err.message,
+      });
+    }
+    next();
+  });
+}, wrap(async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'Choose an image file using the image field' });
+  }
+
+  let metadata;
+  try {
+    metadata = await sharp(req.file.buffer, { limitInputPixels: 40000000 }).metadata();
+  } catch (_) {
+    return res.status(400).json({ error: 'Uploaded file is not a valid image' });
+  }
+
+  if (!['jpeg', 'png', 'webp'].includes(metadata.format)) {
+    return res.status(400).json({ error: 'Only JPEG, PNG, and WebP images are supported' });
+  }
+
+  const filename = `${crypto.randomUUID()}.webp`;
+  const destination = path.join(UPLOAD_DIR, filename);
+
+  try {
+    await sharp(req.file.buffer, { limitInputPixels: 40000000 })
+      .rotate()
+      .resize({ width: 1200, height: 1200, fit: 'inside', withoutEnlargement: true })
+      .webp({ quality: 82 })
+      .toFile(destination);
+  } catch (err) {
+    console.error('Image processing failed:', err.message);
+    return res.status(400).json({ error: 'Could not process this image' });
+  }
+
+  res.status(201).json({ image: `/api/products/uploads/${filename}` });
+}));
+
+// Serve only processed WebP files, not the original uploads.
+app.get('/products/uploads/:filename', (req, res, next) => {
+  const filename = req.params.filename;
+  if (!/^[a-f0-9-]{36}\.webp$/.test(filename)) {
+    return res.status(404).end();
+  }
+  res.type('image/webp');
+  res.set('Cache-Control', 'public, max-age=31536000, immutable');
+  res.sendFile(path.join(UPLOAD_DIR, filename), (err) => {
+    if (err && !res.headersSent) next(err);
+  });
+});
 
 app.post('/products', requireAdmin, wrap(async (req, res) => {
   const { out, errors } = cleanProduct(req.body || {}, false);

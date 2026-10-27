@@ -19,3 +19,26 @@ export async function api(path, { method = 'GET', body, auth = true } = {}) {
 }
 
 export const money = (n) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
+
+export async function uploadImage(file) {
+  const form = new FormData();
+  form.append('image', file);
+
+  const headers = {};
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch('/api/products/upload', {
+    method: 'POST',
+    headers,
+    body: form,
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error || `Image upload failed (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}

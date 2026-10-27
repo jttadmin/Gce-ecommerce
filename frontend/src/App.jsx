@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, getToken, money, setToken } from './api.js';
+import { api, getToken, money, setToken, uploadImage } from './api.js';
 
 /* ───────── category colour system ───────── */
 const THEMES = {
@@ -40,9 +40,48 @@ function useEscape(fn) {
   }, [fn]);
 }
 
-function Visual({ image, size }) {
-  if (image && /^https?:/.test(image)) return <img className="visual-img" src={image} alt="" />;
-  return <span className="emoji" style={size ? { fontSize: size } : undefined} aria-hidden="true">{image || '📦'}</span>;
+const PRODUCT_IMAGES = {
+  "4K Action Camera": "https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=640&auto=format&fit=crop&q=80",
+  "Ceramic Pour-Over Set": "https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?w=640&auto=format&fit=crop&q=80",
+  "Cotton Crew T-Shirt": "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=640&auto=format&fit=crop&q=80",
+  "Insulated Hoodie": "https://images.unsplash.com/photo-1556821840-3a63f95609a7?w=640&auto=format&fit=crop&q=80",
+  "LED Desk Lamp": "https://images.unsplash.com/photo-1507473885765-e6ed057f782c?w=640&auto=format&fit=crop&q=80",
+  "Mechanical Keyboard": "https://images.unsplash.com/photo-1587829741301-dc798b83add3?w=640&auto=format&fit=crop&q=80",
+  "Site Reliability Engineering": "https://images.unsplash.com/photo-1532012197267-da84d127e765?w=640&auto=format&fit=crop&q=80",
+  "Smart Fitness Band": "https://images.unsplash.com/photo-1544117519-31a4b719223d?w=640&auto=format&fit=crop&q=80",
+  "Standing Desk Mat": "https://images.unsplash.com/photo-1497366754035-f200968a6e72?w=640&auto=format&fit=crop&q=80",
+  "The Pragmatic Programmer": "https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=640&auto=format&fit=crop&q=80",
+  "Trail Running Shoes": "https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=640&auto=format&fit=crop&q=80",
+  "Wireless Earbuds Pro": "https://images.unsplash.com/photo-1606220945770-b5b6c2c55bf1?w=640&auto=format&fit=crop&q=80",
+};
+
+function Visual({ image, size, name }) {
+  const [failed, setFailed] = useState(false);
+  const isImageUrl = typeof image === 'string' && /^(https?:\/\/|\/)/.test(image);
+  const mappedImage = name ? PRODUCT_IMAGES[name] : null;
+  const src = isImageUrl ? image : mappedImage || null;
+
+  if (src && !failed) {
+    return (
+      <img
+        className="visual-img"
+        src={src}
+        alt={name || ""}
+        loading="lazy"
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+
+  return (
+    <span
+      className="emoji"
+      style={size ? { fontSize: size } : undefined}
+      aria-hidden="true"
+    >
+      {image && !/^(https?:\/\/|\/)/.test(image) ? image : '📦'}
+    </span>
+  );
 }
 
 function Dialog({ onClose, name, side, children }) {
@@ -105,7 +144,7 @@ function ProductDialog({ product, onClose, onAdd }) {
   const low = product.stock > 0 && product.stock <= 10;
   return (
     <Dialog onClose={onClose} name={product.name}>
-      <div className="detail-art" style={{ background: t.tint }}><Visual image={product.image} size="6rem" /></div>
+      <div className="detail-art" style={{ background: t.tint }}><Visual image={product.image} size="6rem" name={product.name} /></div>
       <div className="detail-head">
         <h2 className="dialog-title">{product.name}</h2>
         <span className="price big">{money(product.price)}</span>
@@ -245,23 +284,89 @@ function Orders({ onBack }) {
 
 /* ───────── admin ───────── */
 function Admin({ onBack, notify }) {
-  const [f, setF] = useState({ name: '', category: '', price: '', stock: '', image: '📦', description: '', attributes: '{\n  "brand": ""\n}' });
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const [f, setF] = useState({
+    name: '', category: '', price: '', stock: '',
+    image: '📦', description: '', attributes: '{\n  "brand": ""\n}'
+  });
+  const [imageFile, setImageFile] = useState(null);
+  const [preview, setPreview] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const set = (k) => (e) => setF((prev) => ({ ...prev, [k]: e.target.value }));
+
+  function chooseImage(e) {
+    const file = e.target.files?.[0] || null;
+    if (!file) return;
+
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      notify('Choose a JPEG, PNG, or WebP image.', 'error');
+      e.target.value = '';
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      notify('Image must be 5 MB or smaller.', 'error');
+      e.target.value = '';
+      return;
+    }
+
+    setImageFile(file);
+    setPreview((previous) => {
+      if (previous) URL.revokeObjectURL(previous);
+      return URL.createObjectURL(file);
+    });
+  }
+
   async function submit(e) {
     e.preventDefault();
+    if (saving) return;
+
     let attributes;
-    try { attributes = JSON.parse(f.attributes || '{}'); } catch { notify('Attributes must be valid JSON.', 'error'); return; }
     try {
-      await api('/products', { method: 'POST', body: { ...f, attributes } });
+      attributes = JSON.parse(f.attributes || '{}');
+    } catch {
+      notify('Attributes must be valid JSON.', 'error');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      let image = f.image;
+      if (imageFile) {
+        const uploaded = await uploadImage(imageFile);
+        image = uploaded.image;
+      }
+
+      await api('/products', {
+        method: 'POST',
+        body: { ...f, image, attributes },
+      });
+
       notify(`Added ${f.name}`);
-      setF({ ...f, name: '', price: '', stock: '' });
-    } catch (err) { notify(err.message, 'error'); }
+      setF({
+        name: '', category: '', price: '', stock: '',
+        image: '📦', description: '', attributes: '{\n  "brand": ""\n}'
+      });
+      setImageFile(null);
+      setPreview((previous) => {
+        if (previous) URL.revokeObjectURL(previous);
+        return '';
+      });
+      const picker = document.getElementById('product-image-file');
+      if (picker) picker.value = '';
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setSaving(false);
+    }
   }
+
   return (
     <section className="page narrow">
       <div className="page-head">
         <h1 className="page-title">Add a product</h1>
-        <button className="btn btn-quiet" onClick={onBack}>Back to shop</button>
+        <button type="button" className="btn btn-quiet" onClick={onBack}>
+          Back to shop
+        </button>
       </div>
       <form className="stack admin" onSubmit={submit}>
         <input aria-label="Name" placeholder="Name" value={f.name} onChange={set('name')} required />
@@ -270,11 +375,46 @@ function Admin({ onBack, notify }) {
           <input aria-label="Price" placeholder="Price in ₹" type="number" min="0" step="0.01" value={f.price} onChange={set('price')} required />
           <input aria-label="Stock" placeholder="Units in stock" type="number" min="0" value={f.stock} onChange={set('stock')} required />
         </div>
-        <input aria-label="Image" placeholder="Emoji or image URL" value={f.image} onChange={set('image')} />
+
+        <label htmlFor="product-image-file">Product image (JPEG, PNG, or WebP; max 5 MB)</label>
+        <input
+          id="product-image-file"
+          aria-label="Product image file"
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          onChange={chooseImage}
+        />
+        {preview && (
+          <div className="product-image-preview">
+            <img
+              src={preview}
+              alt="Selected product preview"
+              style={{ width: '100%', maxWidth: 240, maxHeight: 220, objectFit: 'contain', borderRadius: 8 }}
+            />
+            <button
+              type="button"
+              className="btn btn-quiet"
+              onClick={() => {
+                setImageFile(null);
+                setPreview((previous) => {
+                  if (previous) URL.revokeObjectURL(previous);
+                  return '';
+                });
+                const picker = document.getElementById('product-image-file');
+                if (picker) picker.value = '';
+              }}
+            >
+              Remove selected image
+            </button>
+          </div>
+        )}
+
         <textarea aria-label="Description" placeholder="Description" value={f.description} onChange={set('description')} rows={2} />
         <label className="hint" htmlFor="attrs">Attributes: any JSON object, different for each product type</label>
         <textarea id="attrs" value={f.attributes} onChange={set('attributes')} rows={6} className="mono" />
-        <button className="btn btn-primary">Add product</button>
+        <button className="btn btn-primary" type="submit" disabled={saving}>
+          {saving ? 'Uploading and saving…' : 'Add product'}
+        </button>
       </form>
     </section>
   );
@@ -307,17 +447,44 @@ function Hero({ categories, onPick }) {
 function Tile({ p, onOpen, onAdd }) {
   const t = themeFor(p.category);
   const low = p.stock > 0 && p.stock <= 10;
+  const brand = p.attributes?.brand;
+  const description = p.description?.trim();
+
   return (
     <article className="tile">
       <div className="tile-art" style={{ background: t.tint }}>
-        <button className="tile-open" aria-label={`View ${p.name}`} onClick={() => onOpen(p)}><Visual image={p.image} /></button>
-        <button className="tile-add" aria-label={`Add ${p.name} to cart`} disabled={p.stock < 1} onClick={() => onAdd(p)}>+</button>
+        <button className="tile-open" aria-label={`View ${p.name}`} onClick={() => onOpen(p)}>
+          <Visual image={p.image} name={p.name} />
+        </button>
+        <button className="tile-add" aria-label={`Add ${p.name} to cart`}
+          disabled={p.stock < 1} onClick={() => onAdd(p)}>
+          +
+        </button>
       </div>
+
       <div className="tile-body">
-        <h3>{p.name}</h3>
+        <span className="tile-category">{p.category}</span>
+        <h3>
+          <button className="tile-title" onClick={() => onOpen(p)}>
+            {p.name}
+          </button>
+        </h3>
+
+        {brand && <p className="tile-brand">Brand: {brand}</p>}
+        {description && <p className="tile-description">{description}</p>}
+
         <p className="tile-row">
           <span className="price">{money(p.price)}</span>
-          {p.stock < 1 ? <span className="stock out">Sold out</span> : low ? <span className="stock low">Only {p.stock} left</span> : null}
+        </p>
+
+        <p className="tile-availability">
+          {p.stock < 1 ? (
+            <span className="stock out">Out of stock</span>
+          ) : low ? (
+            <span className="stock low">Only {p.stock} left</span>
+          ) : (
+            <span className="stock">In stock</span>
+          )}
         </p>
       </div>
     </article>
